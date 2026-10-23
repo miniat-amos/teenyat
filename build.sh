@@ -64,6 +64,10 @@ for arg in "$@"; do
             echo "Cleaning build directories..."
             rm -rf build
             popd > /dev/null
+            # `source build.sh clean` must not close the caller's terminal.
+            if [ "${BASH_SOURCE[0]}" != "$0" ]; then
+                return 0
+            fi
             exit 0
             ;;
         *)
