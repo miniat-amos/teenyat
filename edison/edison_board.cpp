@@ -322,6 +322,9 @@ void process_keyboard(teenyat* t){
         render_dip_switches();
         render_push_buttons(&inp_keyboard);
         led_array_draw(t);   
+        tny_trigger_timer_event(t, TNY_TIMER_A);
+        tny_set_timer_pin(t,TNY_TIMER_A,inp_keyboard.bits.bit0);
+        tny_set_timer_pin(t,TNY_TIMER_B,inp_keyboard.bits.bit2);
     }
 
     old_keyboard.u = inp_keyboard.u;
