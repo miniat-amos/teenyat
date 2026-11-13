@@ -32,4 +32,6 @@ The Color LCD also supports both mouse and keyboad support as well as the abilit
 | MOUSEX               | 0xFFFC                 | Read           | Current mouse X position                                                        |
 | MOUSEY               | 0xFFFD                 | Read           | Current mouse Y position                                                        |
 | KEY                  | 0xFFFE                 | Read           | Returns current key pressed                                                     |
+| KEY_WAIT             | 0xFFFA                 | Read           | Returns the next key press, waiting for one if none is ready; held keys repeat if KEY_REPEAT is set <br> **Variable delay:** no instructions run until a key is pressed |
+| KEY_REPEAT           | 0xFFF9                 | Read/Write     | Cycles a held key waits before KEY_WAIT returns it again ; 0 = no repeat (default) <br> e.g. 50000 = ~50 ms at 1 MHz |
 | TERM                 | 0xFFFF                 | Write          | Output value to terminal                                                        |
