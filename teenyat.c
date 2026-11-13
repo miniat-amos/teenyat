@@ -95,6 +95,26 @@ static void default_bus_write(teenyat *t, tny_uword addr, tny_word data, uint16_
 	return;
 }
 
+static void default_continue_bus_read(teenyat *t, tny_uword addr, tny_word *data, uint16_t *delay) {
+	/* all parameters unused */
+	(void)t;
+	(void)addr;
+	(void)data;
+	(void)delay;
+
+	return;
+}
+
+static void default_continue_bus_write(teenyat *t, tny_uword addr, uint16_t *delay) {
+	/* all parameters unused */
+	(void)t;
+	(void)addr;
+	(void)delay;
+
+	return;
+}
+
+
 bool tny_init_from_file(teenyat *t, FILE *bin_file) {
 
 	if(!t) {
@@ -115,6 +135,9 @@ bool tny_init_from_file(teenyat *t, FILE *bin_file) {
 	/* default bus callbacks; replace with tny_set_bus_read_cb()/tny_set_bus_write_cb() */
 	t->bus_read = default_bus_read;
 	t->bus_write = default_bus_write;
+
+	t->continue_bus_read = default_continue_bus_read;
+	t->continue_bus_write = default_continue_bus_write;
 
 	/*
 	 * Initialize the clock_rate structure.  Note the epoch and
@@ -235,6 +258,8 @@ bool tny_reset(teenyat *t) {
 	/* Set up our initial calibrated cycles */
 	t->clock_rate.cycles_until_calibrate = t->clock_rate.calibrate_cycles;
 
+	t->bus_pending = false;
+	t->bus_op = 0;
 	t->delay_cycles = 0;
 	t->cycle_cnt = 0;
 	t->cycle_count_base = 0;
@@ -289,6 +314,22 @@ void tny_set_bus_read_cb(teenyat *t, TNY_READ_FROM_BUS_FNPTR bus_read) {
 
 void tny_set_bus_write_cb(teenyat *t, TNY_WRITE_TO_BUS_FNPTR bus_write) {
 	t->bus_write = bus_write ? bus_write : default_bus_write;
+
+	return;
+}
+
+void tny_set_continue_bus_read_cb(teenyat *t, TNY_CONTINUE_READ_FROM_BUS_FNPTR continue_bus_read) {
+	t->continue_bus_read = continue_bus_read ? continue_bus_read : default_continue_bus_read;
+}	
+
+void tny_set_continue_bus_write_cb(teenyat *t, TNY_CONTINUE_WRITE_TO_BUS_FNPTR continue_bus_write) {
+	t->continue_bus_write = continue_bus_write ? continue_bus_write : default_continue_bus_write;
+}
+
+void tny_bus_pending(teenyat *t) {
+	if(t && t->bus_op) {
+		t->bus_pending = true;
+	}
 
 	return;
 }
@@ -437,6 +478,35 @@ void tny_clock(teenyat *t) {
 	 */
 	if(t->delay_cycles) {
 		t->delay_cycles--;
+	}else if(t->bus_pending) {
+		/*
+		 * A peripheral LOD/STR is still in progress, so continue it instead of
+		 * fetching a new instruction. The continue callback calls tny_bus_pending()
+		 * if it needs more time.
+		 */
+		uint8_t op = t->bus_op;
+		uint16_t delay = 0;
+		t->bus_pending = false;
+
+		switch(op) {
+		case TNY_OPCODE_LOD:
+		{
+			tny_word data = {.u = 0};
+			t->continue_bus_read(t, t->bus_addr, &data, &delay);
+			if(!t->bus_pending) {
+				t->reg[t->bus_reg] = data;
+				/* Ensure the zero register still has a zero in it */
+				t->reg[TNY_REG_ZERO].u = 0;
+			}
+			break;
+		}
+		case TNY_OPCODE_STR:
+			t->continue_bus_write(t, t->bus_addr, &delay);
+			break;
+		default:
+			break;
+		}
+		t->delay_cycles += delay;
 	}else{
 		/*
 		 * All instruction fetches are limited to the range 0x0000 through 0x7FFF.
@@ -551,8 +621,16 @@ void tny_clock(teenyat *t) {
 
 						tny_word data = {.u = 0};
 						uint16_t delay = 0;
+						/* the callback calls tny_bus_pending() to signal that it is still ongoing */
+						t->bus_pending = false;
+						t->bus_op = TNY_OPCODE_LOD;
+						t->bus_reg = reg1;
+						t->bus_addr = addr;
 						t->bus_read(t, addr, &data, &delay);
-						t->reg[reg1] = data;
+						if(!t->bus_pending) {
+							/* finished immediately */
+							t->reg[reg1] = data;
+						}
 						t->delay_cycles += delay;
 					}
 					else if(addr <= TNY_MAX_RAM_ADDRESS) {
@@ -641,6 +719,10 @@ void tny_clock(teenyat *t) {
 						t->delay_cycles += TNY_BUS_EXTERNAL_DELAY_ADJUST;
 
 						uint16_t delay = 0;
+						/* the callback calls tny_bus_pending() to signal that it is still ongoing */
+						t->bus_pending = false;
+						t->bus_op = TNY_OPCODE_STR;
+						t->bus_addr = addr;
 						t->bus_write(t, addr, t->reg[reg2], &delay);
 						t->delay_cycles += delay;
 					}

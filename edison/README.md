@@ -39,5 +39,8 @@ The Edison's buttons and peripherals are linked to the TeenyATs 2 different 16-b
 | LCD_CURSOR_XY        | 0xA00C                 | Read/Write     | Sets the cursor's xy to the value does wrap <br> byte1 = X ; byte0 = Y                           |
 | BUZZER_LEFT          | 0xA010                 | Write          | Plays sine/triange wave on left buzzer at given frequency  <br> bit15 = triangle wave            |
 | BUZZER_RIGHT         | 0xA011                 | Write          | Plays sine/triange wave on right buzzer at given frequency <br> bit15 = triange wave |
+| BUZZER_DURATION      | 0xA012                 | Read/Write     | Note length in milliseconds used by BUZZER_LEFT_NOTE / BUZZER_RIGHT_NOTE |
+| BUZZER_LEFT_NOTE     | 0xA013                 | Write          | Plays a note (same format as BUZZER_LEFT) for BUZZER_DURATION ms, then stops <br> **Variable delay:** the STR waits until the note finishes ; 0 = rest |
+| BUZZER_RIGHT_NOTE    | 0xA014                 | Write          | Same as BUZZER_LEFT_NOTE for the right buzzer |
 | FADER_LEFT           | 0xA020                 | Read           | Returns value between 0-100 based on left fader's position                         |
 | FADER_RIGHT          | 0xA021                 | Read           | Returns value between 0-100 based on right fader's position                        |

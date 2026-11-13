@@ -74,7 +74,65 @@ typedef void(*TNY_WRITE_TO_BUS_FNPTR)(teenyat *t, tny_uword addr, tny_word data,
 
 /**
  * @brief
- *   System calllback function to handle TeenyAT output port pin changes
+ *   System callback function to handle TeenyAT read requests for variable bus
+ *   delays
+ *
+ * Called once per cycle (after any delay has expired) while a peripheral
+ * LOD is still in progress, i.e. after the bus read callback or a
+ * previous call to this callback used tny_bus_pending().  Call
+ * tny_bus_pending() again if the access still isn't done or return without
+ * calling it to finish the access.  Once finished, the value placed in data
+ * is stored in the LOD's destination register.
+ * 
+ * @param t
+ *   The TeenyAT instance making the request
+ *
+ * @param addr
+ *   Address of the read request still in progress
+ *
+ * @param[out] data
+ *   Output the data result of the request.  If the requested address is not
+ *   simulated or otherwise illegal (eg, not meant as an input address) it is
+ *   up to the callback function what value to return here.
+ *
+ * @param delay
+ *   Use this to tell the TeenyAT how many additional cycles of cost you want
+ *   associated with this read request.  For example, if you want the device
+ *   being read from to have a penalty of 9 clock cycles on top of the particular
+ *   instruction used, pass 9 as the delay.  The TeenyAT will ensure this
+ *   many cycles pass before the next instruction is executed.
+ */
+typedef void(*TNY_CONTINUE_READ_FROM_BUS_FNPTR)(teenyat *t, tny_uword addr, tny_word *data, uint16_t *delay);
+
+/**
+ * @brief
+ *   System callback function to handle TeenyAT write requests for variable bus
+ *   delays
+ *
+ * Called once per cycle (after any delay has expired) while a peripheral
+ * STR is still in progress, i.e. after the bus write callback or a
+ * previous call to this callback used tny_bus_pending().  Call
+ * tny_bus_pending() again if the access still isn't done or return without
+ * calling it to finish the access.
+ * 
+ * @param t
+ *   The TeenyAT instance making the request
+ *
+ * @param addr
+ *   Address of the write request still in progress
+ * 
+ * @param delay
+ *   Use this to tell the TeenyAT how many additional cycles of cost you want
+ *   associated with this write request.  For example, if you want the device
+ *   being written to to have a penalty of 7 clock cycles on top of the particular
+ *   instruction used, pass 7 as the delay.  The TeenyAT will ensure this
+ *   many cycles pass before the next instruction is executed.
+ */
+typedef void(*TNY_CONTINUE_WRITE_TO_BUS_FNPTR)(teenyat *t, tny_uword addr, uint16_t *delay);
+
+/**
+ * @brief
+ *   System callback function to handle TeenyAT output port pin changes
  *
  * Whenever a store instruction (STR) writes to one of the two GPIO port addresses,
  * values in bits identified for output may change.  If any are actually modified
@@ -245,13 +303,42 @@ struct teenyat {
      **/
     alu_flags flags;
 	/**
-	 * System calllback function to handle TeenyAT read requests
+	 * True while a peripheral bus access (LOD/STR) is still in progress.
+	 * Set via tny_bus_pending(); bus_op says which kind of access it is.
+	 */
+	bool bus_pending;
+	/**
+	 * The address of the current (or most recent) peripheral bus access.
+	 * Passed to the continue callbacks as their addr parameter.
+	 */
+	tny_uword bus_addr;
+	/**
+	 * Destination register of a peripheral LOD still in progress.
+	 */
+	uint8_t bus_reg;
+	/**
+	 * Kind of the current peripheral bus access (TNY_OPCODE_LOD or
+	 * TNY_OPCODE_STR).
+	 */
+	uint8_t bus_op;
+	/**
+	 * System callback function to handle TeenyAT read requests
 	 */
 	TNY_READ_FROM_BUS_FNPTR bus_read;
 	/**
 	 * System calllback function to handle TeenyAT write requests
 	 */
 	TNY_WRITE_TO_BUS_FNPTR bus_write;
+	/**
+	 * System callback function to handle TeenyAT read requests for variable bus
+	 * delays
+	 */
+	TNY_CONTINUE_READ_FROM_BUS_FNPTR continue_bus_read;
+	/**
+	 * System callback function to handle TeenyAT write requests for variable bus
+	 * delays
+	 */
+	TNY_CONTINUE_WRITE_TO_BUS_FNPTR continue_bus_write;
 	/**
 	 * The number of remaining cycles to delay to simulate the cost of the
 	 * previous instruction.
@@ -524,6 +611,9 @@ void tny_set_port_change_cb(teenyat *t, TNY_PORT_CHANGE_FNPTR port_change);
  * @brief  
  *   Register the bus read callback (NULL restores the no-op default)
  * 
+ * @param t
+ *   The TeenyAT instance
+ * 
  * @param bus_read
  *   Callback function for handling read requests
  * 
@@ -536,6 +626,9 @@ void tny_set_bus_read_cb(teenyat *t, TNY_READ_FROM_BUS_FNPTR bus_read);
  * @brief
  *   Register the bus write callback (NULL restores the no-op default)
  * 
+ * @param t
+ *   The TeenyAT instance
+ * 
  * @param bus_write
  *   Callback function for handling write requests
  * 
@@ -543,6 +636,53 @@ void tny_set_bus_read_cb(teenyat *t, TNY_READ_FROM_BUS_FNPTR bus_read);
  *   Call after tny_init (initialization clears the instance).
  */
 void tny_set_bus_write_cb(teenyat *t, TNY_WRITE_TO_BUS_FNPTR bus_write);
+
+/**
+ * @brief
+ *   Register the continue bus read callback (NULL restores the no-op default)
+ * 
+ * @param t
+ *   The TeenyAT instance
+ * 
+ * @param continue_bus_read
+ *   Callback function for handling read requests for variable bus delays
+ * 
+ * @note
+ *   Call after tny_init (initialization clears the instance).
+ * 
+ */
+void tny_set_continue_bus_read_cb(teenyat *t, TNY_CONTINUE_READ_FROM_BUS_FNPTR continue_bus_read);
+/**
+ * @brief
+ *   Register the continue bus write callback (NULL restores the no-op default)
+ * 
+ * @param t
+ *   The TeenyAT instance
+ * 
+ * @param continue_bus_write
+ *   Callback function for handling write requests for variable bus delays
+ * 
+ * @note
+ *   Call after tny_init (initialization clears the instance).
+ * 
+ */
+void tny_set_continue_bus_write_cb(teenyat *t, TNY_CONTINUE_WRITE_TO_BUS_FNPTR continue_bus_write);
+
+/**
+ * @brief
+ *   Mark the current peripheral bus access as still in progress
+ *
+ * Call from inside a bus read/write callback, or a continue callback, when
+ * the peripheral needs more time.  The TeenyAT will then call the matching
+ * continue callback on later cycles instead of fetching new instructions.
+ *
+ * @param t
+ *   The TeenyAT instance
+ *
+ * @note
+ *   A callback that returns without calling this ends the access
+ */
+void tny_bus_pending(teenyat *t);
 
 /**
  * @brief

@@ -118,6 +118,25 @@
  *      - plays sine/triangle wave at given frequency using bit 15 as control
  *      - send zero to turn off (regardless of control bit being set)
  *      - PLEASE NOTE buzzers are peripherals pressing pause will not stop them from playing
+ *
+ *  BUZZER_DURATION:
+ *      - 0xA012
+ *      - read/write
+ *      - length in milliseconds used by BUZZER_LEFT_NOTE / BUZZER_RIGHT_NOTE
+ *
+ *  BUZZER_LEFT_NOTE:
+ *      - 0xA013
+ *      - write only
+ *      - same value format as BUZZER_LEFT (frequency, bit 15 = triangle wave)
+ *      - plays the note for BUZZER_DURATION ms, then stops the buzzer
+ *      - variable delay: the STR stays in progress (no instructions run) until
+ *        the note has finished playing.  A frequency of 0 is a rest.
+ *      - with a duration of 0 it behaves like BUZZER_LEFT (no wait, no stop)
+ *
+ *  BUZZER_RIGHT_NOTE:
+ *      - 0xA014
+ *      - write only
+ *      - same as BUZZER_LEFT_NOTE, but for the right buzzer
 */
 
 #define LCD_CURSOR 0xA000 
@@ -135,6 +154,9 @@
 #define LCD_CURSOR_XY 0xA00C
 #define BUZZER_LEFT 0xA010
 #define BUZZER_RIGHT 0xA011
+#define BUZZER_DURATION 0xA012
+#define BUZZER_LEFT_NOTE 0xA013
+#define BUZZER_RIGHT_NOTE 0xA014
 #define FADER_LEFT 0xA020
 #define FADER_RIGHT 0xA021
 
@@ -142,6 +164,11 @@
 void bus_read(teenyat *t, tny_uword addr, tny_word *data, uint16_t *delay);
 void bus_write(teenyat *t, tny_uword addr, tny_word data, uint16_t *delay);
 void port_change(teenyat *t, bool is_port_a, tny_word port);
+void continue_bus_write(teenyat *t, tny_uword addr, uint16_t *delay);
+
+/* State for BUZZER_*_NOTE: length of the next note and when the current one ends */
+static uint16_t buzzer_duration_ms = 0;
+static std::chrono::steady_clock::time_point note_end_time;
 
 int main(int argc, char* argv[])
 {  
@@ -158,6 +185,7 @@ int main(int argc, char* argv[])
         tny_set_bus_read_cb(&t, bus_read);
         tny_set_bus_write_cb(&t, bus_write);
         tny_set_port_change_cb(&t,port_change);
+        tny_set_continue_bus_write_cb(&t, continue_bus_write);
         fclose(bin_file);
     }else {
         std::cout << "Failed to init bin file (invalid path?)" << std::endl;
@@ -249,13 +277,16 @@ void bus_read(teenyat * /*t*/, tny_uword addr, tny_word *data, uint16_t */*delay
             /* Calculate reverse percentage for right fader */
             data->u = 100 - (((float)(fader_values[1] - LOC_FADER_RIGHT_TL_BR[0][1]) / (LOC_FADER_RIGHT_TL_BR[1][1] - LOC_FADER_RIGHT_TL_BR[0][1])) * 100);
             break;
+        case BUZZER_DURATION:
+            data->u = buzzer_duration_ms;
+            break;
         default:
             break;
     }
 }
 
 
-void bus_write(teenyat * /*t*/, tny_uword addr, tny_word data, uint16_t */*delay*/)
+void bus_write(teenyat *t, tny_uword addr, tny_word data, uint16_t */*delay*/)
 {
     switch(addr){
         case LCD_CURSOR:
@@ -304,6 +335,55 @@ void bus_write(teenyat * /*t*/, tny_uword addr, tny_word data, uint16_t */*delay
         case BUZZER_RIGHT:
             buzzer_state[1] = data.u & 0x7FFF;
             play_sound(data.u,1);
+            break;
+        case BUZZER_DURATION:
+            buzzer_duration_ms = data.u;
+            break;
+        case BUZZER_LEFT_NOTE:
+            buzzer_state[0] = data.u & 0x7FFF;
+            play_sound(data.u,0);
+            if(buzzer_duration_ms > 0) {
+                /* Keep the STR in progress until the note has played */
+                note_end_time = std::chrono::steady_clock::now()
+                              + std::chrono::milliseconds(buzzer_duration_ms);
+                tny_bus_pending(t);
+            }
+            break;
+        case BUZZER_RIGHT_NOTE:
+            buzzer_state[1] = data.u & 0x7FFF;
+            play_sound(data.u,1);
+            if(buzzer_duration_ms > 0) {
+                /* Keep the STR in progress until the note has played */
+                note_end_time = std::chrono::steady_clock::now()
+                              + std::chrono::milliseconds(buzzer_duration_ms);
+                tny_bus_pending(t);
+            }
+            break;
+        default:
+            break;
+    }
+}
+
+void continue_bus_write(teenyat *t, tny_uword addr, uint16_t * /*delay*/)
+{
+    bool note_over = std::chrono::steady_clock::now() >= note_end_time;
+
+    switch(addr){
+        case BUZZER_LEFT_NOTE:
+            if(note_over) {
+                buzzer_state[0] = 0;
+                play_sound(0,0);
+            }else {
+                tny_bus_pending(t);
+            }
+            break;
+        case BUZZER_RIGHT_NOTE:
+            if(note_over) {
+                buzzer_state[1] = 0;
+                play_sound(0,1);
+            }else {
+                tny_bus_pending(t);
+            }
             break;
         default:
             break;

@@ -114,7 +114,19 @@
  *  - 0xFFFE
  *  - read only
  *  - returns current key down
- *   
+ *
+ *  KEY_WAIT:
+ *  - 0xFFFA
+ *  - read only
+ *  - returns the next key press, waiting for one if none is ready
+ *  - variable delay: the LOD stays in progress (no instructions run) until a
+ *    key is pressed
+ * 
+ *  KEY_REPEAT:
+ *  - 0xFFF9
+ *  - read/write
+ *  - how many cycles a held key waits before KEY_WAIT returns it again
+ *  - 0 (default) turns repeat off: KEY_WAIT returns each key once per press
  */
 
 #define LIVESCREEN_START 0x9000 
@@ -139,9 +151,15 @@
 #define MOUSEB 0xFFFB 
 #define TERM 0xFFFF
 #define KEY 0xFFFE
+#define KEY_WAIT 0xFFFA
+#define KEY_REPEAT 0xFFF9
 
 void bus_read(teenyat *t, tny_uword addr, tny_word *data, uint16_t *delay);
 void bus_write(teenyat *t, tny_uword addr, tny_word data, uint16_t *delay);
+void continue_bus_read(teenyat *t, tny_uword addr, tny_word *data, uint16_t *delay);
+static void key_wait(teenyat *t, tny_word *data);
+
+static uint64_t key_repeat_cycles = 0;
 
 int main(int argc, char *argv[])
 {   
@@ -160,6 +178,7 @@ int main(int argc, char *argv[])
         tny_init_from_file(&t, bin_file);
         tny_set_bus_read_cb(&t, bus_read);
         tny_set_bus_write_cb(&t, bus_write);
+        tny_set_continue_bus_read_cb(&t, continue_bus_read);
         fclose(bin_file);
     }else {
         std::cout << "Failed to init bin file (invalid path?)" << std::endl;
@@ -182,7 +201,7 @@ int main(int argc, char *argv[])
     return EXIT_SUCCESS;
 }
 
-void bus_read(teenyat * /*t*/, tny_uword addr, tny_word *data, uint16_t *delay)
+void bus_read(teenyat *t, tny_uword addr, tny_word *data, uint16_t *delay)
 {
     /* Handles pixel screen reads */
     if(addr >= UPDATESCREEN_START && addr <= UPDATESCREEN_END) {
@@ -247,10 +266,53 @@ void bus_read(teenyat * /*t*/, tny_uword addr, tny_word *data, uint16_t *delay)
         /* Reading a key requires a HUGE delay */
         *delay = 10000;
         break;
+    case KEY_REPEAT:
+        data->u = key_repeat_cycles;
+        break;
+    case KEY_WAIT:
+        key_wait(t, data);
+        break;
     default:
         break;
     }
     return;
+}
+
+void continue_bus_read(teenyat *t, tny_uword addr, tny_word *data, uint16_t * /*delay*/)
+{
+    if(addr == KEY_WAIT) {
+        if(t->cycle_cnt % 10000 == 0) {
+            tigrUpdate(window);
+        }
+        key_wait(t, data);
+    }
+}
+
+/* Return the next key for KEY_WAIT, or keep the LOD waiting. */
+static void key_wait(teenyat *t, tny_word *data)
+{
+    static int last_key = 0;
+    static uint64_t last_cycle = 0;
+
+    if(keyboard_input_buffer[0] != 0) {
+        last_key = buffer_pop(keyboard_input_buffer, KEYBOARD_INPUT_BUFFER_SIZE);
+        last_cycle = t->cycle_cnt;
+        data->u = last_key;
+        return;
+    }
+
+    if(last_key != 0 && !tigrKeyHeld(window, last_key)) {
+        last_key = 0;
+    }
+
+    if(key_repeat_cycles != 0 && last_key != 0 &&
+       t->cycle_cnt - last_cycle >= key_repeat_cycles) {
+        last_cycle = t->cycle_cnt;
+        data->u = last_key;
+        return;
+    }
+
+    tny_bus_pending(t);
 }
 
 void bus_write(teenyat * /*t*/, tny_uword addr, tny_word data, uint16_t * /*delay*/)
@@ -320,6 +382,9 @@ void bus_write(teenyat * /*t*/, tny_uword addr, tny_word data, uint16_t * /*dela
             std::cout << "<out of range>";
         }
         std::cout << std::endl;
+        break;
+    case KEY_REPEAT:
+        key_repeat_cycles = data.u;
         break;
     default:
         break;
